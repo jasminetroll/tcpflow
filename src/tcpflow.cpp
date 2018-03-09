@@ -91,6 +91,7 @@ scanner_t *scanners_builtin[] = {
     0};
 
 bool opt_no_promisc = false;		// true if we should not use promiscious mode
+int opt_pcap_buffer_size = 0;		// pcap buffer size in bytes if positive
 
 /* Long options!
  *
@@ -117,7 +118,7 @@ static void usage(int level)
     std::cout << PACKAGE_NAME << " version " << PACKAGE_VERSION << "\n\n";
     std::cout << "usage: " << progname << " [-aBcCDhIpsvVZ] [-b max_bytes] [-d debug_level] \n";
     std::cout << "     [-[eE] scanner] [-f max_fds] [-F[ctTXMkmg]] [-h|--help] [-i iface]\n";
-    std::cout << "     [-l files...] [-L semlock] [-m min_bytes] [-o outdir] [-r file] [-R file]\n";
+    std::cout << "     [-l files...] [-L semlock] [-m min_bytes] [-o outdir] [-P size] [-r file] [-R file]\n";
     std::cout << "     [-S name=value] [-T template] [-U|--relinquish-privileges user] [-v|--verbose]\n";
     std::cout << "     [-w file] [-x scanner] [-X xmlfile] [-z|--chroot dir] [expression]\n\n";
     std::cout << "   -a: do ALL post-processing.\n";
@@ -132,6 +133,7 @@ static void usage(int level)
     std::cout << "   -l: treat non-flag arguments as input files rather than a pcap expression\n";
     std::cout << "   -L  semlock - specifies that writes are locked using a named semaphore\n";
     std::cout << "   -p: don't use promiscuous mode\n";
+    std::cout << "   -P: set pcap buffer size in bytes\n";
     std::cout << "   -q: quiet mode - do not print warnings\n";
 
     std::cout << "   -r file      : read packets from tcpdump pcap file (may be repeated)\n";
@@ -462,9 +464,28 @@ static void process_infile(tcpdemux &demux,const std::string &expression,const c
 	}
 
 	/* make sure we can open the device */
-	if ((pd = pcap_open_live(device, SNAPLEN, !opt_no_promisc, 1000, error)) == NULL){
+	if ((pd = pcap_create(device, error)) == NULL) {
 	    die("%s", error);
 	}
+        if (pcap_set_snaplen(pd, SNAPLEN) < 0) {
+	    die("%s", pcap_geterr(pd));
+        }
+        if (pcap_set_promisc(pd, !opt_no_promisc) < 0) {
+	    die("%s", pcap_geterr(pd));
+        }
+        if (pcap_set_timeout(pd, 1000) < 0) {
+	    die("%s", pcap_geterr(pd));
+        }
+        if (opt_pcap_buffer_size > 0) {
+            if (pcap_set_buffer_size(pd, opt_pcap_buffer_size) < 0) {
+                die("%s", pcap_geterr(pd));
+            }
+            DEBUG(10) ("pcap buffer size set to %d", opt_pcap_buffer_size);
+        }
+        if (pcap_activate(pd) < 0) {
+	    die("%s", pcap_geterr(pd));
+        }
+        
         tcpflow_droproot(demux);                     // drop root if requested
 	/* get the handler for this kind of packets */
 	dlt = pcap_datalink(pd);
@@ -576,7 +597,7 @@ int main(int argc, char *argv[])
 
     bool trailing_input_list = false;
     int arg;
-    while ((arg = getopt_long(argc, argv, "aA:Bb:cCd:DE:e:E:F:f:gHhIi:lL:m:o:pqR:r:S:sT:U:Vvw:x:X:z:Z0", longopts, NULL)) != EOF) {
+    while ((arg = getopt_long(argc, argv, "aA:Bb:cCd:DE:e:E:F:f:gHhIi:lL:m:o:pP:qR:r:S:sT:U:Vvw:x:X:z:Z0", longopts, NULL)) != EOF) {
 	switch (arg) {
 	case 'a':
 	    demux.opt.post_processing = true;
@@ -668,6 +689,7 @@ int main(int argc, char *argv[])
             flow::outdir = optarg;
             break;
 	case 'p': opt_no_promisc = true; DEBUG(10) ("NOT turning on promiscuous mode"); break;
+	case 'P': opt_pcap_buffer_size = atoi(optarg); break;
         case 'q': opt_quiet = true; break;
 	case 'R': Rfiles.push_back(optarg); break;
 	case 'r': rfiles.push_back(optarg); break;
